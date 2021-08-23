@@ -11,6 +11,7 @@ from abc import ABC
 import numpy as np
 
 import Dobot.DobotSDK as dobotSDK
+from gripper import RobotiqGripper
 import cv2
 
 
@@ -377,8 +378,11 @@ class RealEnvWrapper(GymEnvWrapper):
 
 
 class DobotEnv(gym.Env):
-    def __init__(self, ip="192.168.5.1", video_ip=0):
+    def __init__(self, ip="192.168.5.1", port="/dev/ttyUSB0", camera=4):
+        self.grip = RobotiqGripper(port)
+        self.grip.activate()
         self.api = dobotSDK.load()
+
         # sim "127.0.0.1"
         resultConnect = dobotSDK.ConnectDobot(self.api, ip)  # 真实机械臂
         print("resultConnect", resultConnect)
@@ -389,8 +393,8 @@ class DobotEnv(gym.Env):
             self._set_speed(60)
         else:
             raise ConnectionError
-        self.init_point = [550, 150, 200]
-        self.cap = cv2.VideoCapture(video_ip)
+        self.init_point = [0, -600, 300]
+        self.cap = cv2.VideoCapture(camera)
         self._state_obs = None
         self.start_time = 0
         self._max_episode_steps = 10
@@ -402,15 +406,21 @@ class DobotEnv(gym.Env):
 
     def step(self, action):
         # norm action
-        coor = [(i) * 200 for i in action][:3]
-        coor[0] *= 2
-        coor[1] *= 2
-        # print('action', action, end='   ')
-        # print('coor', coor)
-        self._move_action([600, 300, 40], isBlock=True)
+        coor = action[:3]
+        coor[0] *= 400
+        coor[1] *= 400
+        coor[2] *= 200
+        g_ac = action[-1] * 300
+        g_ac = int(g_ac)
+        # coor.append(g_ac)
+        print('action', action, end='   ')
+        print('coor', coor, end='   ')
+        print('grip', g_ac, end='   ')
+        # self._move_action([0, -600, 140], isBlock=True)
         done = False
         if self._safety(coor):
             self._move_actionRel(coor, isBlock=True)
+            self.grip.goToRel(g_ac)
             # time.sleep(0.3)
         else:
             print('safety problem')
@@ -456,6 +466,7 @@ class DobotEnv(gym.Env):
             self._rescue()
         init_point = self.init_point
         self._move_action(init_point)
+        self.grip.goTo(150)
         self._state_obs = self._get_data_from_camera()
         self.start_time = time.time()
         return self._get_obs()
@@ -488,13 +499,14 @@ class DobotEnv(gym.Env):
         return dobotSDK.GetExchange(self.api)[10]
 
     def _safety(self, coor):
-        if self._get_coordinate()[0] + coor[0] < 350:
+        x_limit = (-550, 550)
+        y_limit = (-800, -340)
+        z_limit = (255, 999)  # 220 for short table
+        if not x_limit[0] < self._get_coordinate()[0] + coor[0] < x_limit[1]:
             return False
-        if self._get_coordinate()[0] + coor[0] > 650:
+        if not y_limit[0] < self._get_coordinate()[1] + coor[1] < y_limit[1]:
             return False
-        if self._get_coordinate()[1] + coor[1] < 0:
-            return False
-        if self._get_coordinate()[2] + coor[2] < 30:
+        if not z_limit[0] < self._get_coordinate()[2] + coor[2] < z_limit[1]:
             return False
         if self._get_alarm():
             return False
